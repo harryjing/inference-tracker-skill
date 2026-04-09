@@ -251,32 +251,227 @@ def calculate_relevance(text: str, labels: list = None, comments: int = 0,
     return is_relevant, score, matched
 
 
+# 英文技术术语 → 中文翻译映射
+TECH_TERM_MAP = {
+    # KV Cache 相关
+    'kv cache': 'KV缓存', 'kvcache': 'KV缓存', 'cache': '缓存',
+    'prefill': '预填充', 'decode': '解码', 'prefill-decode': '预填充-解码分离',
+    'pd disagg': '预填充解码分离', 'disaggregated': '分离式', 'disaggregation': '分离架构',
+    'radix attention': '基数注意力', 'radix tree': '基数树',
+    'hicache': '分层缓存(HiCache)', 'hisparse': '稀疏缓存(hiSparse)',
+    'offload': '卸载到主机内存', 'swap': '交换(GPU↔CPU)', 'h2d': '主机到设备传输',
+    'd2h': '设备到主机传输', 'dtod': '设备间拷贝',
+    # 量化相关
+    'quantization': '量化', 'quantize': '量化', 'fp8': 'FP8量化', 'fp4': 'FP4量化',
+    'int8': 'INT8量化', 'int4': 'INT4量化', 'nvfp4': 'NVFP4量化',
+    'awq': 'AWQ量化', 'gptq': 'GPTQ量化', 'compression': '压缩',
+    # 注意力机制
+    'attention': '注意力机制', 'flash attention': 'FlashAttention',
+    'flashattention': 'FlashAttention', 'flashinfer': 'FlashInfer',
+    'mla': '多头潜在注意力(MLA)', 'gqa': '分组查询注意力(GQA)',
+    'mqa': '多查询注意力(MQA)', 'sliding window': '滑动窗口注意力',
+    'sparse attention': '稀疏注意力', 'ring attention': '环形注意力',
+    'sdpa': '缩放点积注意力(SDPA)',
+    # 投机解码
+    'speculative': '投机解码', 'speculation': '投机解码', 'draft': '草稿模型',
+    'eagle': 'EAGLE投机解码', 'eagle3': 'EAGLE3投机解码',
+    'lookahead': '前瞻解码', 'mtp': '多Token预测(MTP)',
+    'suffix decoding': '后缀解码', 'acceptance rate': '接受率',
+    # 并行与分布式
+    'tensor parallel': '张量并行(TP)', 'pipeline parallel': '流水线并行(PP)',
+    'data parallel': '数据并行(DP)', 'expert parallel': '专家并行(EP)',
+    'parallel': '并行', 'distributed': '分布式',
+    'all-to-all': 'All-to-All通信', 'a2a': 'All-to-All通信',
+    'allreduce': 'AllReduce通信',
+    # MoE 相关
+    'moe': '混合专家模型(MoE)', 'mixture of experts': '混合专家模型',
+    'expert': '专家层', 'scattered mlp': '分散式MLP',
+    # 调度与批处理
+    'scheduler': '调度器', 'scheduling': '调度', 'batch': '批处理',
+    'continuous batching': '连续批处理', 'inflight': '在飞批处理',
+    # 性能相关
+    'latency': '延迟', 'throughput': '吞吐量', 'ttft': '首Token延迟(TTFT)',
+    'tpot': '每Token延迟(TPOT)', 'memory': '内存/显存',
+    'oom': '显存溢出(OOM)', 'peak memory': '峰值显存',
+    'memory spike': '显存峰值', 'memory efficient': '显存高效',
+    'speedup': '加速', 'overlap': '计算通信重叠',
+    # 模型与架构
+    'rope': '旋转位置编码(RoPE)', 'checkpoint': '检查点',
+    'checkpoint prefetch': '检查点预取', 'gemm': '矩阵乘法(GEMM)',
+    # 平台
+    'rocm': 'AMD ROCm', 'cuda': 'NVIDIA CUDA', 'blackwell': 'Blackwell架构',
+    'benchmark': '基准测试', 'serving': '推理服务',
+    'deployment': '部署', 'helm': 'Helm部署',
+    # 模型名
+    'deepseek': 'DeepSeek', 'kimi-vl': 'Kimi-VL', 'llama': 'LLaMA',
+    'diffusion': '扩散模型', 'vlm': '视觉语言模型(VLM)',
+}
+
+
+def identify_tech_domain(title: str, body: str, matched_keywords: list) -> str:
+    """识别主要技术领域，返回中文标签"""
+    combined = (title + ' ' + ' '.join(matched_keywords)).lower()
+
+    # 按优先级匹配，先匹配更具体的
+    domain_rules = [
+        (['speculative', 'speculation', 'mtp', 'eagle', 'draft', 'suffix decoding', 'lookahead'], '投机解码'),
+        (['kv cache', 'kvcache', 'hicache', 'hisparse', 'radix'], 'KV缓存'),
+        (['quantization', 'quantize', 'fp8', 'fp4', 'int8', 'int4', 'nvfp4', 'awq', 'gptq'], '量化'),
+        (['attention', 'flash attention', 'flashattention', 'flashinfer', 'mla', 'gqa', 'sdpa', 'swa'], '注意力机制'),
+        (['moe', 'mixture of experts', 'expert', 'all-to-all', 'a2a'], 'MoE'),
+        (['parallel', 'tensor parallel', 'disaggregated', 'disaggregation', 'allreduce'], '分布式推理'),
+        (['scheduler', 'scheduling', 'continuous batching'], '调度'),
+        (['memory', 'oom', 'offload', 'swap'], '显存管理'),
+        (['cache', 'prefetch'], '缓存优化'),
+        (['batch', 'batching'], '批处理'),
+        (['benchmark', 'support matrix'], '基准测试'),
+        (['deploy', 'deployment', 'helm', 'serving'], '部署'),
+        (['diffusion'], '扩散模型'),
+        (['amd', 'rocm'], 'AMD平台'),
+        (['rope'], '位置编码'),
+    ]
+
+    for keywords, domain in domain_rules:
+        for kw in keywords:
+            if kw in combined:
+                return domain
+
+    return '推理优化'
+
+
+def generate_action_description(title: str, body: str) -> str:
+    """从 title 和 body 中提取核心动作，生成中文动作描述"""
+    combined = (title + ' ' + (body or '')[:500]).lower()
+
+    # 动作模式匹配，越具体越优先
+    action_patterns = [
+        # 消除/避免
+        (r'eliminate\s+.*?copy', '消除数据拷贝开销'),
+        (r'eliminate\s+.*?allocation', '消除内存分配开销'),
+        (r'avoid\s+.*?recompute', '避免重复计算'),
+        (r'avoid\s+.*?copy', '避免数据拷贝'),
+        # 重叠/并行
+        (r'overlap\s+.*?transfer.*?attention', '将数据传输与注意力计算重叠执行'),
+        (r'overlap\s+.*?h2d', '将主机到设备传输与计算重叠'),
+        (r'overlap\s+.*?compute', '将通信与计算重叠'),
+        # 缓存
+        (r'cache\s+.*?rope', '缓存RoPE位置编码避免每步重算'),
+        (r'cache\s+.*?coord', '缓存坐标信息避免重复计算'),
+        (r'incremental\s+.*?kv\s*cache\s+.*?transfer', '增量传输KV缓存降低通信量'),
+        (r'kv\s*cache\s+.*?capacity\s+.*?check', '检查KV缓存容量防止超额分配'),
+        (r'kv\s*cache\s+.*?transfer', '优化KV缓存传输效率'),
+        (r'prefetch.*?buffer', '添加预取缓冲区减少内存重复占用'),
+        # 投机解码
+        (r'speculative\s+decoding.*?hisparse', '在hiSparse稀疏缓存上支持投机解码'),
+        (r'mtp.*?speculative', '结合MTP多Token预测与投机解码'),
+        (r'suffix\s+decoding', '实现基于后缀树的免草稿模型投机解码'),
+        # 量化
+        (r'awq.*?refactor', '重构AWQ量化方案，分离kernel调用与权重初始化'),
+        (r'nvfp4.*?backend', '为NVFP4量化添加PyTorch后端支持'),
+        (r'quantization\s+refactor', '重构量化框架，提升可扩展性'),
+        # 显存
+        (r'oom.*?multi.?image', '修复多图推理显存溢出问题'),
+        (r'oom', '修复显存溢出问题'),
+        (r'reduce.*?peak.*?memory', '降低峰值GPU显存占用'),
+        (r'reduce.*?memory.*?spike', '消除显存使用峰值'),
+        (r'memory\s+spike', '解决训练/推理显存峰值问题'),
+        # 通信
+        (r'allreduce\s+fusion', '优化AllReduce通信融合策略'),
+        (r'all.to.all\s+sharding', '使用All-to-All分片降低通信开销'),
+        # 部署
+        (r'checkpoint\s+prefetch', '为网络文件系统添加检查点协调预取'),
+        (r'deployment\s+target', '扩展部署目标支持'),
+        (r'llm-d\s+deployment', '添加llm-d推理部署目标支持'),
+        # 平台支持
+        (r'rocm.*?fa[23]', '在AMD ROCm平台上启用FlashAttention支持'),
+        (r'suffix\s+decoding.*?rocm', '在AMD ROCm平台上添加后缀解码支持'),
+        # 基准测试
+        (r'support\s+matrix', '更新兼容性测试矩阵'),
+        (r'collector.*?data', '更新基准数据采集器和测试数据'),
+        # 通用
+        (r'add\s+support\s+for', '添加新功能支持'),
+        (r'fix\s+.*?deployment', '修复部署相关问题'),
+    ]
+
+    for pattern, description in action_patterns:
+        if re.search(pattern, combined):
+            return description
+
+    return ''
+
+
+def generate_technical_insight(title: str, body: str, matched_keywords: list) -> str:
+    """生成影响说明：这个变更的实际价值和影响"""
+    combined = (title + ' ' + (body or '')[:1500]).lower()
+
+    insights = []
+
+    # 性能影响
+    if any(w in combined for w in ['eliminate', 'avoid', 'remove', 'skip']) and any(w in combined for w in ['copy', 'recompute', 'allocation']):
+        insights.append('减少冗余操作，直接提升推理吞吐/降低延迟')
+
+    if 'overlap' in combined and any(w in combined for w in ['transfer', 'h2d', 'compute', 'attention']):
+        insights.append('隐藏数据搬运延迟，提升GPU利用率')
+
+    if 'oom' in combined or 'memory spike' in combined or 'memory growth' in combined:
+        insights.append('提升大模型/多图场景推理稳定性')
+
+    if 'speculative' in combined or 'mtp' in combined:
+        insights.append('加速自回归解码，降低生成延迟')
+
+    if 'kv cache' in combined and ('disagg' in combined or 'transfer' in combined or 'incremental' in combined):
+        insights.append('提升预填充-解码分离架构效率')
+
+    if any(w in combined for w in ['quantization', 'awq', 'nvfp4', 'fp8']):
+        insights.append('降低模型显存占用和计算量')
+
+    if 'all-to-all' in combined or 'allreduce' in combined:
+        insights.append('优化多GPU通信效率')
+
+    if 'benchmark' in combined or 'support matrix' in combined:
+        insights.append('为模型选型和配置优化提供数据参考')
+
+    if ('deployment' in combined or 'helm' in combined) and ('target' in combined or 'llm-d' in combined):
+        insights.append('简化推理服务部署流程')
+
+    if 'batch' in combined and ('capacity' in combined or 'oversubscription' in combined):
+        insights.append('防止因批次过大导致OOM崩溃')
+
+    if 'checkpoint' in combined and 'prefetch' in combined:
+        insights.append('加速模型加载，减少冷启动时间')
+
+    return insights[0] if insights else ''
+
+
 def generate_chinese_explanation(title: str, body: str, matched_keywords: list,
                                   item_type: str = 'issue', author: str = '') -> str:
-    """基于 title 和 body 内容生成具体的中文摘要描述"""
+    """基于 title 和 body 内容生成全中文技术摘要"""
     change_type = classify_change_type(title, body)
-    core_title = extract_title_summary(title)
-    body_context = extract_body_context(body, title)
+    tech_domain = identify_tech_domain(title, body, matched_keywords)
+    action_desc = generate_action_description(title, body)
+    insight = generate_technical_insight(title, body, matched_keywords)
     metrics = extract_metrics(body)
 
-    parts = []
+    # 构造完整中文描述
+    parts = [f'[{change_type}]']
 
-    # 变更类型标签
-    parts.append(f'[{change_type}]')
+    if action_desc:
+        parts.append(f'【{tech_domain}】{action_desc}')
+    else:
+        # 回退：用原标题 + 技术领域
+        core_title = extract_title_summary(title)
+        parts.append(f'【{tech_domain}】{core_title}')
 
-    # 核心描述：优先用清理后的 title
-    parts.append(core_title)
-
-    # 补充 body 上下文（如果 title 不够具体）
-    if body_context and len(core_title) < 40:
-        parts.append(f'— {body_context}')
-
-    # 量化指标
     if metrics:
         metric_str = '、'.join(metrics[:3])
-        parts.append(f'(指标: {metric_str})')
+        parts.append(f'（{metric_str}）')
 
-    return ' '.join(parts)
+    explanation = ' '.join(parts)
+
+    if insight:
+        explanation += f'\n     核心价值: {insight}'
+
+    return explanation
 
 
 def analyze_github_data(github_data: dict) -> dict:

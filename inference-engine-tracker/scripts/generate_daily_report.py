@@ -117,36 +117,65 @@ def collect_all_relevant_items(updates: Dict[str, Any]) -> List[dict]:
     return items
 
 
+def format_status_label(item: dict) -> str:
+    """返回中文状态标签"""
+    if item['type'] == 'PR':
+        if item.get('merged_at'):
+            return '已合并'
+        elif item['state'] == 'closed':
+            return '已关闭'
+        return '进行中'
+    elif item['type'] == 'Issue':
+        if item['state'] == 'closed':
+            return '已关闭'
+        return '开放中'
+    return ''
+
+
+def format_keywords_cn(key_points: list) -> str:
+    """将英文关键词转为中文标签"""
+    kw_map = {
+        'kv cache': 'KV缓存', 'kvcache': 'KV缓存', 'cache': '缓存',
+        'attention': '注意力', 'memory': '显存', 'batch': '批处理',
+        'parallel': '并行', 'speculative': '投机解码', 'quantization': '量化',
+        'moe': 'MoE', 'scheduler': '调度', 'performance': '性能',
+        'optimize': '优化', 'speed': '速度', 'latency': '延迟',
+        'throughput': '吞吐', 'reduce': '降低', 'improve': '改进',
+        'swap': '交换', 'compress': '压缩', 'deployment': '部署',
+        'benchmark': '基准测试', 'config': '配置', 'support': '支持',
+    }
+    cn_kws = []
+    for kw in key_points[:4]:
+        cn_kws.append(kw_map.get(kw.lower(), kw))
+    return ' '.join(f'`{k}`' for k in cn_kws)
+
+
 def generate_highlights_section(all_items: List[dict], max_items: int = 8) -> str:
-    """生成"今日重点"汇总区"""
+    """生成"今日重点"汇总区（全中文增强版）"""
     if not all_items:
         return ""
 
     lines = ["## 今日重点\n"]
 
     for i, item in enumerate(all_items[:max_items], 1):
-        type_label = item['type']
-        status = ''
-        if item['type'] == 'PR':
-            if item.get('merged_at'):
-                status = ' (已合并)'
-            elif item['state'] == 'closed':
-                status = ' (已关闭)'
-        elif item['type'] == 'Issue':
-            if item['state'] == 'closed':
-                status = ' (已关闭)'
-
-        keywords_str = ''
-        if item['key_points']:
-            kw_display = item['key_points'][:3]
-            keywords_str = ' ' + ' '.join(f'`{k}`' for k in kw_display)
+        status_label = format_status_label(item)
+        keywords_str = format_keywords_cn(item['key_points']) if item['key_points'] else ''
+        importance = score_label(item['score'])
 
         lines.append(
-            f"{i}. **[{item['repo']} {type_label} #{item['number']}]({item['url']})**{status} "
-            f"@{item['author']}{keywords_str} [{score_label(item['score'])}]"
+            f"{i}. **[{item['repo']} {item['type']} #{item['number']}]({item['url']})** "
+            f"[{status_label}] @{item['author']} {keywords_str} 【重要性: {importance}】"
         )
         if item.get('explanation'):
-            lines.append(f"   > {item['explanation']}")
+            # explanation 可能包含多行（核心要点在第二行）
+            for exp_line in item['explanation'].split('\n'):
+                exp_line = exp_line.strip()
+                if exp_line:
+                    lines.append(f"   > {exp_line}")
+        # 显示量化指标
+        if item.get('metrics'):
+            metrics_str = '、'.join(item['metrics'][:3])
+            lines.append(f"   > 📊 性能数据: {metrics_str}")
         lines.append("")
 
     return "\n".join(lines)
@@ -240,38 +269,50 @@ def generate_github_section(updates: Dict[str, Any]) -> str:
                         lines.append(f"  > {snippet}...")
             lines.append("")
 
-        # 输出 Issues（按评分排序）
+        # 输出 Issues（按评分排序，增强中文描述）
         if relevant_issues:
             lines.append(f"### Issues ({len(relevant_issues)} 个相关，按重要性排序)")
             for issue in relevant_issues[:15]:
-                state_icon = "O" if issue['state'] == 'open' else "C"
+                state_cn = "开放" if issue['state'] == 'open' else "已关闭"
                 labels_str = f" `{'` `'.join(issue['labels'])}`" if issue['labels'] else ""
-                score_str = f" [{score_label(issue['score'])}]"
+                importance = score_label(issue['score'])
                 author_str = f" @{issue['author']}" if issue['author'] else ""
 
                 lines.append(
-                    f"- **[{state_icon}]** [#{issue['number']}: {issue['title']}]({issue['url']})"
-                    f"{labels_str}{author_str}{score_str}"
+                    f"- **[{state_cn}]** [#{issue['number']}: {issue['title']}]({issue['url']})"
+                    f"{labels_str}{author_str} 【重要性: {importance}】"
                 )
                 if issue.get('explanation'):
-                    lines.append(f"  > {issue['explanation']}")
+                    for exp_line in issue['explanation'].split('\n'):
+                        exp_line = exp_line.strip()
+                        if exp_line:
+                            lines.append(f"  > {exp_line}")
+                if issue.get('metrics'):
+                    metrics_str = '、'.join(issue['metrics'][:3])
+                    lines.append(f"  > 📊 性能数据: {metrics_str}")
             lines.append("")
 
-        # 输出 PRs（按评分排序）
+        # 输出 PRs（按评分排序，增强中文描述）
         if relevant_prs:
             lines.append(f"### PRs ({len(relevant_prs)} 个相关，按重要性排序)")
             for pr in relevant_prs[:15]:
-                status = "merged" if pr.get('merged_at') else pr['state']
+                status_cn = "已合并" if pr.get('merged_at') else ("已关闭" if pr['state'] == 'closed' else "进行中")
                 labels_str = f" `{'` `'.join(pr['labels'])}`" if pr['labels'] else ""
-                score_str = f" [{score_label(pr['score'])}]"
+                importance = score_label(pr['score'])
                 author_str = f" @{pr['author']}" if pr['author'] else ""
 
                 lines.append(
-                    f"- **[{status}]** [#{pr['number']}: {pr['title']}]({pr['url']})"
-                    f"{labels_str}{author_str}{score_str}"
+                    f"- **[{status_cn}]** [#{pr['number']}: {pr['title']}]({pr['url']})"
+                    f"{labels_str}{author_str} 【重要性: {importance}】"
                 )
                 if pr.get('explanation'):
-                    lines.append(f"  > {pr['explanation']}")
+                    for exp_line in pr['explanation'].split('\n'):
+                        exp_line = exp_line.strip()
+                        if exp_line:
+                            lines.append(f"  > {exp_line}")
+                if pr.get('metrics'):
+                    metrics_str = '、'.join(pr['metrics'][:3])
+                    lines.append(f"  > 📊 性能数据: {metrics_str}")
             lines.append("")
 
         if not any([relevant_issues, relevant_prs, releases]):
@@ -338,7 +379,7 @@ def generate_daily_report(
         "",
         "---",
         "",
-        "*报告关注推理加速和准确率提升相关的技术更新*",
+        "*本报告聚焦推理加速、显存优化、量化技术、投机解码与准确率提升等核心技术方向*",
         ""
     ]
 
