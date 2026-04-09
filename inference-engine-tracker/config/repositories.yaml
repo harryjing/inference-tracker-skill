@@ -1,0 +1,81 @@
+repositories:
+  - name: SGLang
+    owner: sgl-project
+    repo: sglang
+    track:
+      - issues
+      - pulls
+      - releases
+    keywords:
+      - performance
+      - optimize
+      - speed
+      - latency
+      - throughput
+      - radix attention
+      - speculative
+      - quantization
+      - parallel
+      - scheduler
+      - kv cache
+      - disaggregated
+      - prefill
+      - decode
+      - accuracy
+      - correctness
+      - fp8
+      - int8
+      - moe
+
+  - name: SpecForge
+    owner: sgl-project
+    repo: SpecForge
+    track:
+      - issues
+      - pulls
+      - releases
+    keywords:
+      - speculative
+      - draft
+      - accuracy
+      - acceptance rate
+      - speedup
+      - performance
+      - optimize
+      - latency
+      - throughput
+      - token
+      - generation
+      - model
+
+  - name: AIConfigurator
+    owner: ai-dynamo
+    repo: aiconfigurator
+    track:
+      - issues
+      - pulls
+      - releases
+    keywords:
+      - performance
+      - optimize
+      - config
+      - inference
+      - accuracy
+      - throughput
+      - latency
+      - deployment
+      - serving
+      - model
+      - benchmark
+
+settings:
+  # 每类更新的最大获取数量
+  max_issues: 30
+  max_releases: 5
+  max_pulls: 30
+
+  # 每次请求后的延迟（秒），用于控制 API 速率
+  request_delay: 0.5
+
+  # PR 状态：all 获取所有，closed 仅获取已合并
+  pr_state: all
